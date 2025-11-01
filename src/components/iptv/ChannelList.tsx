@@ -148,14 +148,43 @@ export function ChannelList() {
   const playChannel = async (channel: any) => {
     if (!activePortal) return;
 
+    console.log('[ChannelList.playChannel] ========== PLAY CHANNEL REQUEST ==========');
+    console.log('[ChannelList.playChannel] Channel data:', {
+      id: channel.id,
+      externalId: channel.externalId,
+      name: channel.name,
+      number: channel.number,
+      cmd: channel.cmd?.substring(0, 100) + (channel.cmd?.length > 100 ? '...' : ''),
+    });
+    console.log('[ChannelList.playChannel] Portal data:', {
+      url: activePortal.url,
+      macAddress: activePortal.macAddress,
+      timezone: activePortal.timezone,
+    });
+
     try {
       // Get stream URL
-      const response = await axios.post('/api/iptv/stalker/stream', {
+      const requestPayload = {
         portalUrl: activePortal.url,
         macAddress: activePortal.macAddress,
         timezone: activePortal.timezone,
         cmd: channel.cmd,
         channelId: channel.externalId,
+      };
+      
+      console.log('[ChannelList.playChannel] Request payload:', {
+        ...requestPayload,
+        cmd: requestPayload.cmd?.substring(0, 100) + (requestPayload.cmd?.length > 100 ? '...' : ''),
+        channelId: requestPayload.channelId,
+        channelIdType: typeof requestPayload.channelId,
+      });
+      
+      const response = await axios.post('/api/iptv/stalker/stream', requestPayload);
+
+      console.log('[ChannelList.playChannel] Response received:', {
+        success: response.data.success,
+        hasStreamUrl: !!response.data.streamUrl,
+        streamUrlPreview: response.data.streamUrl?.substring(0, 150) + (response.data.streamUrl?.length > 150 ? '...' : ''),
       });
 
       if (response.data.success) {
@@ -164,8 +193,12 @@ export function ChannelList() {
           streamUrl: response.data.streamUrl,
         });
         toast.success(`Playing ${channel.name}`);
+        console.log('[ChannelList.playChannel] ========== PLAY CHANNEL SUCCESS ==========');
       }
     } catch (error: any) {
+      console.error('[ChannelList.playChannel] ========== PLAY CHANNEL ERROR ==========');
+      console.error('[ChannelList.playChannel] Error:', error);
+      console.error('[ChannelList.playChannel] Error response:', error.response?.data);
       toast.error(error.response?.data?.error || 'Failed to play channel');
     }
   };

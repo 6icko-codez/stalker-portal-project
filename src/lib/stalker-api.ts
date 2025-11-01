@@ -263,16 +263,20 @@ export class StalkerAPI {
 
   async createLink(cmd: string, channelId: string): Promise<string | null> {
     try {
-      console.log('[StalkerAPI.createLink] Creating link with parameters:', {
+      console.log('[StalkerAPI.createLink] ========== CREATE LINK REQUEST ==========');
+      console.log('[StalkerAPI.createLink] Input parameters:', {
         channelId,
+        channelIdType: typeof channelId,
+        channelIdValue: channelId,
         cmd: cmd.substring(0, 100) + (cmd.length > 100 ? '...' : ''),
         cmdLength: cmd.length,
+        portalUrl: this.config.portalUrl,
       });
 
       const data = await this.makeRequest('itv', {
         action: 'create_link',
         cmd: encodeURIComponent(cmd),
-        id: channelId, // CRITICAL FIX: Include channel ID in the request
+        id: channelId, // CRITICAL: Channel ID must be passed to get proper stream parameter
         series: '',
         forced_storage: 'undefined',
         disable_ad: '0',
@@ -280,10 +284,10 @@ export class StalkerAPI {
         JsHttpRequest: '1-xml',
       });
 
-      console.log('[StalkerAPI.createLink] Portal response:', {
+      console.log('[StalkerAPI.createLink] Portal response received:', {
         hasCmd: !!data.js?.cmd,
         cmdPreview: data.js?.cmd ? data.js.cmd.substring(0, 150) + (data.js.cmd.length > 150 ? '...' : '') : 'N/A',
-        fullResponse: JSON.stringify(data).substring(0, 300),
+        fullResponse: JSON.stringify(data).substring(0, 500),
       });
 
       if (data.js?.cmd) {
@@ -309,21 +313,70 @@ export class StalkerAPI {
           console.log('[StalkerAPI.createLink] Extracted URL via regex:', streamUrl.substring(0, 200));
         }
         
-        // Verify the stream parameter is present in the URL
+        // Parse the URL to check for missing port and stream parameter
+        try {
+          const urlObj = new URL(streamUrl);
+          console.log('[StalkerAPI.createLink] Parsed URL components:', {
+            protocol: urlObj.protocol,
+            hostname: urlObj.hostname,
+            port: urlObj.port || '(default)',
+            pathname: urlObj.pathname,
+            searchParams: Array.from(urlObj.searchParams.entries()),
+          });
+          
+          // Check if stream parameter is missing or empty
+          const streamParam = urlObj.searchParams.get('stream');
+          console.log('[StalkerAPI.createLink] Stream parameter check:', {
+            hasStreamParam: streamParam !== null,
+            streamParamValue: streamParam || '(empty)',
+            streamParamLength: streamParam?.length || 0,
+          });
+          
+          // If stream parameter is missing or empty, log a warning
+          if (!streamParam || streamParam === '') {
+            console.warn('[StalkerAPI.createLink] ⚠️ WARNING: Stream parameter is missing or empty!');
+            console.warn('[StalkerAPI.createLink] This may indicate:');
+            console.warn('[StalkerAPI.createLink]   1. Channel ID was not passed correctly to the portal');
+            console.warn('[StalkerAPI.createLink]   2. Portal did not recognize the channel ID');
+            console.warn('[StalkerAPI.createLink]   3. Channel may be unavailable or offline');
+            console.warn('[StalkerAPI.createLink] Channel ID used:', channelId);
+          }
+          
+          // Ensure port is included if it's 80 or 443 and not already present
+          if (!urlObj.port) {
+            if (urlObj.protocol === 'http:' && !streamUrl.includes(':80/')) {
+              // Add :80 for HTTP if not present
+              streamUrl = streamUrl.replace(urlObj.hostname, `${urlObj.hostname}:80`);
+              console.log('[StalkerAPI.createLink] Added default HTTP port :80 to URL');
+            } else if (urlObj.protocol === 'https:' && !streamUrl.includes(':443/')) {
+              // Add :443 for HTTPS if not present
+              streamUrl = streamUrl.replace(urlObj.hostname, `${urlObj.hostname}:443`);
+              console.log('[StalkerAPI.createLink] Added default HTTPS port :443 to URL');
+            }
+          }
+        } catch (urlError) {
+          console.error('[StalkerAPI.createLink] Failed to parse URL:', urlError);
+        }
+        
+        // Final validation
         const hasStreamParam = streamUrl.includes('stream=') && !streamUrl.includes('stream=&');
-        console.log('[StalkerAPI.createLink] Final stream URL validation:', {
+        console.log('[StalkerAPI.createLink] ========== FINAL STREAM URL ==========');
+        console.log('[StalkerAPI.createLink] Validation:', {
           hasStreamParam,
+          hasPort: streamUrl.includes(':80/') || streamUrl.includes(':443/') || /:\d+\//.test(streamUrl),
           urlLength: streamUrl.length,
-          finalUrl: streamUrl.substring(0, 250) + (streamUrl.length > 250 ? '...' : ''),
+          finalUrl: streamUrl,
         });
+        console.log('[StalkerAPI.createLink] ========== END CREATE LINK ==========');
         
         return streamUrl;
       }
 
-      console.error('[StalkerAPI.createLink] No cmd in portal response');
+      console.error('[StalkerAPI.createLink] ❌ ERROR: No cmd in portal response');
+      console.error('[StalkerAPI.createLink] Full response:', JSON.stringify(data, null, 2));
       return null;
     } catch (error) {
-      console.error('[StalkerAPI.createLink] Create link failed:', error);
+      console.error('[StalkerAPI.createLink] ❌ ERROR: Create link failed:', error);
       return null;
     }
   }
