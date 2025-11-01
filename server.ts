@@ -25,8 +25,16 @@ async function createCustomServer() {
     // Create HTTP server that will handle both Next.js and Socket.IO
     const server = createServer((req, res) => {
       // Skip socket.io requests from Next.js handler
-      if (req.url?.startsWith('/api/socketio')) {
-        return;
+      // Use WHATWG URL API instead of deprecated url.parse()
+      try {
+        if (req.url) {
+          const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+          if (url.pathname.startsWith('/api/socketio')) {
+            return;
+          }
+        }
+      } catch (error) {
+        // If URL parsing fails, let Next.js handle it
       }
       handle(req, res);
     });

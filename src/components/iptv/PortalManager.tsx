@@ -24,6 +24,8 @@ export function PortalManager() {
     useIPTVStore();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isFindingMAC, setIsFindingMAC] = useState(false);
+  const [macAttempts, setMacAttempts] = useState(0);
   const [formData, setFormData] = useState({
     name: '',
     url: '',
@@ -40,6 +42,44 @@ export function PortalManager() {
       }
     } catch (error) {
       toast.error('Failed to generate MAC address');
+    }
+  };
+
+  const findWorkingMAC = async () => {
+    if (!formData.url) {
+      toast.error('Please enter a Portal URL first');
+      return;
+    }
+
+    setIsFindingMAC(true);
+    setMacAttempts(0);
+
+    // Show progress toast
+    const progressToast = toast.loading('Searching for working MAC address...');
+
+    try {
+      const response = await axios.post('/api/iptv/mac/generate-real', {
+        portalUrl: formData.url,
+        timezone: formData.timezone,
+      });
+
+      if (response.data.success) {
+        setFormData((prev) => ({ ...prev, macAddress: response.data.macAddress }));
+        toast.success(
+          `Found working MAC after ${response.data.attempts} attempt(s)!`,
+          { id: progressToast }
+        );
+      }
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.error || 'Failed to find working MAC address';
+      const attempts = error.response?.data?.attempts;
+      toast.error(
+        attempts ? `${errorMsg} (${attempts} attempts)` : errorMsg,
+        { id: progressToast }
+      );
+    } finally {
+      setIsFindingMAC(false);
+      setMacAttempts(0);
     }
   };
 
@@ -170,6 +210,27 @@ export function PortalManager() {
                     Generate
                   </Button>
                 </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={findWorkingMAC}
+                  disabled={isFindingMAC || !formData.url}
+                  className="w-full"
+                >
+                  {isFindingMAC ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Finding Working MAC...
+                    </>
+                  ) : (
+                    'Find Working MAC'
+                  )}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  {isFindingMAC
+                    ? 'Testing random MAC addresses against the portal...'
+                    : 'Automatically finds a valid MAC address for your portal'}
+                </p>
               </div>
 
               <div className="space-y-2">
