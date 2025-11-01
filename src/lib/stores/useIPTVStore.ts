@@ -23,6 +23,51 @@ export interface Channel {
   epgId?: string;
   isHD: boolean;
   isFavorite: boolean;
+  cmd?: string;
+}
+
+export interface Movie {
+  id: string;
+  portalId: string;
+  externalId: string;
+  name: string;
+  originalName?: string;
+  description?: string;
+  poster?: string;
+  logo?: string;
+  cmd: string;
+  year?: string;
+  director?: string;
+  actors?: string;
+  category?: string;
+  ratingImdb?: string;
+  ratingKinopoisk?: string;
+  duration?: string;
+  genres?: string[];
+  streamUrl?: string;
+  isFavorite: boolean;
+}
+
+export interface Series {
+  id: string;
+  portalId: string;
+  externalId: string;
+  name: string;
+  originalName?: string;
+  description?: string;
+  poster?: string;
+  logo?: string;
+  cmd: string;
+  year?: string;
+  director?: string;
+  actors?: string;
+  category?: string;
+  ratingImdb?: string;
+  ratingKinopoisk?: string;
+  genres?: string[];
+  seasons?: any[];
+  streamUrl?: string;
+  isFavorite: boolean;
 }
 
 export interface EPGProgram {
@@ -64,7 +109,7 @@ interface IPTVStore {
   updatePortal: (id: string, updates: Partial<Portal>) => void;
   removePortal: (id: string) => void;
 
-  // Channel Management
+  // Channel Management (Live TV)
   channels: Channel[];
   currentChannel: Channel | null;
   filteredChannels: Channel[];
@@ -75,6 +120,30 @@ interface IPTVStore {
   setSearchQuery: (query: string) => void;
   setSelectedCategory: (category: string | null) => void;
   toggleFavorite: (channelId: string) => void;
+
+  // Movie Management
+  movies: Movie[];
+  currentMovie: Movie | null;
+  filteredMovies: Movie[];
+  movieSearchQuery: string;
+  selectedMovieCategory: string | null;
+  setMovies: (movies: Movie[]) => void;
+  setCurrentMovie: (movie: Movie | null) => void;
+  setMovieSearchQuery: (query: string) => void;
+  setSelectedMovieCategory: (category: string | null) => void;
+  toggleMovieFavorite: (movieId: string) => void;
+
+  // Series Management
+  series: Series[];
+  currentSeries: Series | null;
+  filteredSeries: Series[];
+  seriesSearchQuery: string;
+  selectedSeriesCategory: string | null;
+  setSeries: (series: Series[]) => void;
+  setCurrentSeries: (series: Series | null) => void;
+  setSeriesSearchQuery: (query: string) => void;
+  setSelectedSeriesCategory: (category: string | null) => void;
+  toggleSeriesFavorite: (seriesId: string) => void;
 
   // EPG Management
   epgData: Map<string, EPGProgram[]>;
@@ -129,7 +198,7 @@ export const useIPTVStore = create<IPTVStore>()(
           activePortal: state.activePortal?.id === id ? null : state.activePortal,
         })),
 
-      // Channel Management
+      // Channel Management (Live TV)
       channels: [],
       currentChannel: null,
       filteredChannels: [],
@@ -185,6 +254,122 @@ export const useIPTVStore = create<IPTVStore>()(
             state.currentChannel?.id === channelId
               ? { ...state.currentChannel, isFavorite: !state.currentChannel.isFavorite }
               : state.currentChannel,
+        })),
+
+      // Movie Management
+      movies: [],
+      currentMovie: null,
+      filteredMovies: [],
+      movieSearchQuery: '',
+      selectedMovieCategory: null,
+      setMovies: (movies) => {
+        set({ movies, filteredMovies: movies });
+      },
+      setCurrentMovie: (movie) => set({ currentMovie: movie }),
+      setMovieSearchQuery: (query) => {
+        set({ movieSearchQuery: query });
+        const { movies, selectedMovieCategory } = get();
+        let filtered = movies;
+
+        if (query) {
+          filtered = filtered.filter((m) =>
+            m.name.toLowerCase().includes(query.toLowerCase())
+          );
+        }
+
+        if (selectedMovieCategory) {
+          filtered = filtered.filter((m) => m.category === selectedMovieCategory);
+        }
+
+        set({ filteredMovies: filtered });
+      },
+      setSelectedMovieCategory: (category) => {
+        set({ selectedMovieCategory: category });
+        const { movies, movieSearchQuery } = get();
+        let filtered = movies;
+
+        if (category) {
+          filtered = filtered.filter((m) => m.category === category);
+        }
+
+        if (movieSearchQuery) {
+          filtered = filtered.filter((m) =>
+            m.name.toLowerCase().includes(movieSearchQuery.toLowerCase())
+          );
+        }
+
+        set({ filteredMovies: filtered });
+      },
+      toggleMovieFavorite: (movieId) =>
+        set((state) => ({
+          movies: state.movies.map((m) =>
+            m.id === movieId ? { ...m, isFavorite: !m.isFavorite } : m
+          ),
+          filteredMovies: state.filteredMovies.map((m) =>
+            m.id === movieId ? { ...m, isFavorite: !m.isFavorite } : m
+          ),
+          currentMovie:
+            state.currentMovie?.id === movieId
+              ? { ...state.currentMovie, isFavorite: !state.currentMovie.isFavorite }
+              : state.currentMovie,
+        })),
+
+      // Series Management
+      series: [],
+      currentSeries: null,
+      filteredSeries: [],
+      seriesSearchQuery: '',
+      selectedSeriesCategory: null,
+      setSeries: (series) => {
+        set({ series, filteredSeries: series });
+      },
+      setCurrentSeries: (series) => set({ currentSeries: series }),
+      setSeriesSearchQuery: (query) => {
+        set({ seriesSearchQuery: query });
+        const { series, selectedSeriesCategory } = get();
+        let filtered = series;
+
+        if (query) {
+          filtered = filtered.filter((s) =>
+            s.name.toLowerCase().includes(query.toLowerCase())
+          );
+        }
+
+        if (selectedSeriesCategory) {
+          filtered = filtered.filter((s) => s.category === selectedSeriesCategory);
+        }
+
+        set({ filteredSeries: filtered });
+      },
+      setSelectedSeriesCategory: (category) => {
+        set({ selectedSeriesCategory: category });
+        const { series, seriesSearchQuery } = get();
+        let filtered = series;
+
+        if (category) {
+          filtered = filtered.filter((s) => s.category === category);
+        }
+
+        if (seriesSearchQuery) {
+          filtered = filtered.filter((s) =>
+            s.name.toLowerCase().includes(seriesSearchQuery.toLowerCase())
+          );
+        }
+
+        set({ filteredSeries: filtered });
+      },
+      toggleSeriesFavorite: (seriesId) =>
+        set((state) => ({
+          series: state.series.map((s) =>
+            s.id === seriesId ? { ...s, isFavorite: !s.isFavorite } : s
+          ),
+          filteredSeries: state.filteredSeries.map((s) =>
+            s.id === seriesId ? { ...s, isFavorite: !s.isFavorite } : s
+          ),
+          currentSeries:
+            state.currentSeries?.id === seriesId
+              ? { ...state.currentSeries, isFavorite: !state.currentSeries.isFavorite }
+              : state.currentSeries,
         })),
 
       // EPG Management
