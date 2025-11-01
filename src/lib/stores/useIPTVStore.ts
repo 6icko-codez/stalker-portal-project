@@ -199,13 +199,17 @@ export const useIPTVStore = create<IPTVStore>()(
       // Portal Management
       portals: [],
       activePortal: null,
-      setActivePortal: (portal) => {
+      setActivePortal: async (portal) => {
         const prevPortal = get().activePortal;
         
         // Clear cache when switching portals
         if (prevPortal && portal && prevPortal.id !== portal.id) {
           console.log('[Store] Switching portals, clearing cache');
-          CacheManager.clearPortal(prevPortal.id);
+          try {
+            await CacheManager.clearPortal(prevPortal.id);
+          } catch (error) {
+            console.error('[Store] Failed to clear portal cache:', error);
+          }
           set({ 
             channels: [], 
             filteredChannels: [],
@@ -230,16 +234,19 @@ export const useIPTVStore = create<IPTVStore>()(
               ? { ...state.activePortal, ...updates }
               : state.activePortal,
         })),
-      removePortal: (id) =>
-        set((state) => {
-          // Clear cache for removed portal
-          CacheManager.clearPortal(id);
-          
-          return {
-            portals: state.portals.filter((p) => p.id !== id),
-            activePortal: state.activePortal?.id === id ? null : state.activePortal,
-          };
-        }),
+      removePortal: async (id) => {
+        // Clear cache for removed portal
+        try {
+          await CacheManager.clearPortal(id);
+        } catch (error) {
+          console.error('[Store] Failed to clear portal cache:', error);
+        }
+        
+        set((state) => ({
+          portals: state.portals.filter((p) => p.id !== id),
+          activePortal: state.activePortal?.id === id ? null : state.activePortal,
+        }));
+      },
 
       // Channel Management (Live TV)
       channels: [],
@@ -249,45 +256,61 @@ export const useIPTVStore = create<IPTVStore>()(
       selectedCategory: null,
       isLoadingChannels: false,
       channelsError: null,
-      setChannels: (channels) => {
+      setChannels: async (channels) => {
         set({ channels, filteredChannels: channels, channelsError: null });
         
         // Save to cache
         const { activePortal } = get();
         if (activePortal) {
-          CacheManager.setChannels(activePortal.id, channels);
+          try {
+            await CacheManager.setChannels(activePortal.id, channels);
+          } catch (error) {
+            console.error('[Store] Failed to cache channels:', error);
+          }
         }
       },
       setCurrentChannel: (channel) => set({ currentChannel: channel }),
       setIsLoadingChannels: (loading) => set({ isLoadingChannels: loading }),
       setChannelsError: (error) => set({ channelsError: error }),
-      loadChannelsFromCache: () => {
+      loadChannelsFromCache: async () => {
         const { activePortal } = get();
         if (!activePortal) return false;
 
-        const cachedChannels = CacheManager.getChannels(activePortal.id);
-        if (cachedChannels && cachedChannels.length > 0) {
-          console.log(`[Store] Loaded ${cachedChannels.length} channels from cache`);
-          set({ 
-            channels: cachedChannels, 
-            filteredChannels: cachedChannels,
-            channelsError: null,
-          });
-          return true;
+        try {
+          const cachedChannels = await CacheManager.getChannels(activePortal.id);
+          if (cachedChannels && cachedChannels.length > 0) {
+            console.log(`[Store] Loaded ${cachedChannels.length} channels from cache`);
+            set({ 
+              channels: cachedChannels, 
+              filteredChannels: cachedChannels,
+              channelsError: null,
+            });
+            return true;
+          }
+        } catch (error) {
+          console.error('[Store] Failed to load channels from cache:', error);
         }
         
         return false;
       },
-      saveChannelsToCache: (channels) => {
+      saveChannelsToCache: async (channels) => {
         const { activePortal } = get();
         if (activePortal) {
-          CacheManager.setChannels(activePortal.id, channels);
+          try {
+            await CacheManager.setChannels(activePortal.id, channels);
+          } catch (error) {
+            console.error('[Store] Failed to save channels to cache:', error);
+          }
         }
       },
-      clearChannelsCache: () => {
+      clearChannelsCache: async () => {
         const { activePortal } = get();
         if (activePortal) {
-          CacheManager.remove('iptv-channels', activePortal.id);
+          try {
+            await CacheManager.remove('iptv-channels', activePortal.id);
+          } catch (error) {
+            console.error('[Store] Failed to clear channels cache:', error);
+          }
         }
       },
       setSearchQuery: (query) => {
@@ -346,39 +369,51 @@ export const useIPTVStore = create<IPTVStore>()(
       selectedMovieCategory: null,
       isLoadingMovies: false,
       moviesError: null,
-      setMovies: (movies) => {
+      setMovies: async (movies) => {
         set({ movies, filteredMovies: movies, moviesError: null });
         
         // Save to cache
         const { activePortal } = get();
         if (activePortal) {
-          CacheManager.setMovies(activePortal.id, movies);
+          try {
+            await CacheManager.setMovies(activePortal.id, movies);
+          } catch (error) {
+            console.error('[Store] Failed to cache movies:', error);
+          }
         }
       },
       setCurrentMovie: (movie) => set({ currentMovie: movie }),
       setIsLoadingMovies: (loading) => set({ isLoadingMovies: loading }),
       setMoviesError: (error) => set({ moviesError: error }),
-      loadMoviesFromCache: () => {
+      loadMoviesFromCache: async () => {
         const { activePortal } = get();
         if (!activePortal) return false;
 
-        const cachedMovies = CacheManager.getMovies(activePortal.id);
-        if (cachedMovies && cachedMovies.length > 0) {
-          console.log(`[Store] Loaded ${cachedMovies.length} movies from cache`);
-          set({ 
-            movies: cachedMovies, 
-            filteredMovies: cachedMovies,
-            moviesError: null,
-          });
-          return true;
+        try {
+          const cachedMovies = await CacheManager.getMovies(activePortal.id);
+          if (cachedMovies && cachedMovies.length > 0) {
+            console.log(`[Store] Loaded ${cachedMovies.length} movies from cache`);
+            set({ 
+              movies: cachedMovies, 
+              filteredMovies: cachedMovies,
+              moviesError: null,
+            });
+            return true;
+          }
+        } catch (error) {
+          console.error('[Store] Failed to load movies from cache:', error);
         }
         
         return false;
       },
-      saveMoviesToCache: (movies) => {
+      saveMoviesToCache: async (movies) => {
         const { activePortal } = get();
         if (activePortal) {
-          CacheManager.setMovies(activePortal.id, movies);
+          try {
+            await CacheManager.setMovies(activePortal.id, movies);
+          } catch (error) {
+            console.error('[Store] Failed to save movies to cache:', error);
+          }
         }
       },
       setMovieSearchQuery: (query) => {
@@ -437,39 +472,51 @@ export const useIPTVStore = create<IPTVStore>()(
       selectedSeriesCategory: null,
       isLoadingSeries: false,
       seriesError: null,
-      setSeries: (series) => {
+      setSeries: async (series) => {
         set({ series, filteredSeries: series, seriesError: null });
         
         // Save to cache
         const { activePortal } = get();
         if (activePortal) {
-          CacheManager.setSeries(activePortal.id, series);
+          try {
+            await CacheManager.setSeries(activePortal.id, series);
+          } catch (error) {
+            console.error('[Store] Failed to cache series:', error);
+          }
         }
       },
       setCurrentSeries: (series) => set({ currentSeries: series }),
       setIsLoadingSeries: (loading) => set({ isLoadingSeries: loading }),
       setSeriesError: (error) => set({ seriesError: error }),
-      loadSeriesFromCache: () => {
+      loadSeriesFromCache: async () => {
         const { activePortal } = get();
         if (!activePortal) return false;
 
-        const cachedSeries = CacheManager.getSeries(activePortal.id);
-        if (cachedSeries && cachedSeries.length > 0) {
-          console.log(`[Store] Loaded ${cachedSeries.length} series from cache`);
-          set({ 
-            series: cachedSeries, 
-            filteredSeries: cachedSeries,
-            seriesError: null,
-          });
-          return true;
+        try {
+          const cachedSeries = await CacheManager.getSeries(activePortal.id);
+          if (cachedSeries && cachedSeries.length > 0) {
+            console.log(`[Store] Loaded ${cachedSeries.length} series from cache`);
+            set({ 
+              series: cachedSeries, 
+              filteredSeries: cachedSeries,
+              seriesError: null,
+            });
+            return true;
+          }
+        } catch (error) {
+          console.error('[Store] Failed to load series from cache:', error);
         }
         
         return false;
       },
-      saveSeriesToCache: (series) => {
+      saveSeriesToCache: async (series) => {
         const { activePortal } = get();
         if (activePortal) {
-          CacheManager.setSeries(activePortal.id, series);
+          try {
+            await CacheManager.setSeries(activePortal.id, series);
+          } catch (error) {
+            console.error('[Store] Failed to save series to cache:', error);
+          }
         }
       },
       setSeriesSearchQuery: (query) => {
