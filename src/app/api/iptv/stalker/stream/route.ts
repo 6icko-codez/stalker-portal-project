@@ -55,6 +55,22 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`[Stream API ${requestId}] Handshake successful, token received`);
+    
+    // Try to get subscription info
+    let subscriptionInfo = null;
+    try {
+      subscriptionInfo = await api.getSubscriptionInfo();
+      if (subscriptionInfo) {
+        console.log(`[Stream API ${requestId}] Subscription info:`, {
+          status: subscriptionInfo.status,
+          expiryDate: subscriptionInfo.expiryDate,
+          daysRemaining: subscriptionInfo.daysRemaining,
+        });
+      }
+    } catch (error) {
+      console.log(`[Stream API ${requestId}] Could not fetch subscription info (non-critical)`);
+    }
+    
     console.log(`[Stream API ${requestId}] Creating stream link...`);
 
     // Create stream link
@@ -92,6 +108,7 @@ export async function POST(request: NextRequest) {
         isM3U8: streamUrl.includes('.m3u8'),
         protocol: streamUrl.split(':')[0],
       },
+      subscription: subscriptionInfo,
     });
   } catch (error: any) {
     console.error(`[Stream API ${requestId}] ========== ERROR ==========`);
