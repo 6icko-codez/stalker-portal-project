@@ -1,6 +1,6 @@
 /**
  * CacheManager - Smart caching system for IPTV data
- * Handles localStorage operations with TTL and portal-specific caching
+ * Handles IndexedDB operations with TTL and portal-specific caching
  */
 
 export interface CacheEntry<T> {
@@ -18,6 +18,9 @@ export interface CacheOptions {
 export class CacheManager {
   private static readonly CACHE_VERSION = '1.0.0';
   private static readonly DEFAULT_TTL = 4 * 60 * 60 * 1000; // 4 hours in milliseconds
+  private static readonly DB_NAME = 'IPTVCacheDB';
+  private static readonly DB_VERSION = 1;
+  private static readonly STORE_NAME = 'iptv_cache';
 
   // Cache key prefixes
   private static readonly KEYS = {
@@ -29,10 +32,41 @@ export class CacheManager {
   };
 
   /**
-   * Check if we're in a browser environment
+   * Check if we're in a browser environment with IndexedDB support
    */
   private static isBrowser(): boolean {
-    return typeof window !== 'undefined' && typeof localStorage !== 'undefined';
+    return typeof window !== 'undefined' && typeof indexedDB !== 'undefined';
+  }
+
+  /**
+   * Initialize and open the IndexedDB database
+   */
+  private static async openDatabase(): Promise<IDBDatabase> {
+    if (!this.isBrowser()) {
+      throw new Error('IndexedDB not available');
+    }
+
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
+
+      request.onerror = () => {
+        reject(new Error('Failed to open IndexedDB database'));
+      };
+
+      request.onsuccess = () => {
+        resolve(request.result);
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+
+        // Create object store if it doesn't exist
+        if (!db.objectStoreNames.contains(this.STORE_NAME)) {
+          db.createObjectStore(this.STORE_NAME);
+          console.log(`[CacheManager] Created object store: ${this.STORE_NAME}`);
+        }
+      };
+    });
   }
 
   /**
@@ -45,13 +79,13 @@ export class CacheManager {
   /**
    * Set data in cache with metadata
    */
-  static set<T>(
+  static async set<T>(
     key: string,
     portalId: string,
     data: T
-  ): boolean {
+  ): Promise<boolean> {
     if (!this.isBrowser()) {
-      console.warn('CacheManager: localStorage not available');
+      console.warn('CacheManager: IndexedDB not available');
       return false;
     }
 
@@ -64,20 +98,40 @@ export class CacheManager {
       };
 
       const cacheKey = this.getCacheKey(key, portalId);
-      localStorage.setItem(cacheKey, JSON.stringify(cacheEntry));
-      
-      console.log(`[CacheManager] Cached ${key} for portal ${portalId}`, {
-        dataSize: JSON.stringify(data).length,
-        timestamp: new Date(cacheEntry.timestamp).toISOString(),
-      });
+      const db = await this.openDatabase();
 
-      return true;
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([this.STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(this.STORE_NAME);
+        const request = store.put(JSON.stringify(cacheEntry), cacheKey);
+
+        request.onsuccess = () => {
+          console.log(`[CacheManager] Cached ${key} for portal ${portalId}`, {
+            dataSize: JSON.stringify(data).length,
+            timestamp: new Date(cacheEntry.timestamp).toISOString(),
+          });
+          db.close();
+          resolve(true);
+        };
+
+        request.onerror = () => {
+          console.error('[CacheManager] Failed to set cache:', request.error);
+          db.close();
+          reject(request.error);
+        };
+
+        transaction.onerror = () => {
+          console.error('[CacheManager] Transaction error:', transaction.error);
+          db.close();
+          reject(transaction.error);
+        };
+      });
     } catch (error) {
       console.error('[CacheManager] Failed to set cache:', error);
       // Handle quota exceeded error
       if (error instanceof DOMException && error.name === 'QuotaExceededError') {
         console.warn('[CacheManager] Storage quota exceeded, clearing old cache');
-        this.clearAll();
+        await this.clearAll();
       }
       return false;
     }
@@ -86,11 +140,11 @@ export class CacheManager {
   /**
    * Get data from cache if valid
    */
-  static get<T>(
+  static async get<T>(
     key: string,
     portalId: string,
     options: CacheOptions = {}
-  ): T | null {
+  ): Promise<T | null> {
     if (!this.isBrowser()) {
       return null;
     }
@@ -104,47 +158,84 @@ export class CacheManager {
 
     try {
       const cacheKey = this.getCacheKey(key, portalId);
-      const cached = localStorage.getItem(cacheKey);
+      const db = await this.openDatabase();
 
-      if (!cached) {
-        console.log(`[CacheManager] No cache found for ${key}`);
-        return null;
-      }
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([this.STORE_NAME], 'readonly');
+        const store = transaction.objectStore(this.STORE_NAME);
+        const request = store.get(cacheKey);
 
-      const cacheEntry: CacheEntry<T> = JSON.parse(cached);
+        request.onsuccess = async () => {
+          const cached = request.result;
 
-      // Validate cache version
-      if (cacheEntry.version !== this.CACHE_VERSION) {
-        console.log(`[CacheManager] Cache version mismatch for ${key}, invalidating`);
-        this.remove(key, portalId);
-        return null;
-      }
+          if (!cached) {
+            console.log(`[CacheManager] No cache found for ${key}`);
+            db.close();
+            resolve(null);
+            return;
+          }
 
-      // Validate portal ID
-      if (cacheEntry.portalId !== portalId) {
-        console.log(`[CacheManager] Portal ID mismatch for ${key}, invalidating`);
-        this.remove(key, portalId);
-        return null;
-      }
+          try {
+            const cacheEntry: CacheEntry<T> = JSON.parse(cached);
 
-      // Check if cache is stale
-      const age = Date.now() - cacheEntry.timestamp;
-      const isStale = age > ttl;
+            // Validate cache version
+            if (cacheEntry.version !== this.CACHE_VERSION) {
+              console.log(`[CacheManager] Cache version mismatch for ${key}, invalidating`);
+              db.close();
+              await this.remove(key, portalId);
+              resolve(null);
+              return;
+            }
 
-      if (isStale) {
-        console.log(`[CacheManager] Cache expired for ${key}`, {
-          age: Math.round(age / 1000 / 60),
-          ttl: Math.round(ttl / 1000 / 60),
-        });
-        return null;
-      }
+            // Validate portal ID
+            if (cacheEntry.portalId !== portalId) {
+              console.log(`[CacheManager] Portal ID mismatch for ${key}, invalidating`);
+              db.close();
+              await this.remove(key, portalId);
+              resolve(null);
+              return;
+            }
 
-      console.log(`[CacheManager] Cache hit for ${key}`, {
-        age: Math.round(age / 1000 / 60) + ' minutes',
-        dataSize: JSON.stringify(cacheEntry.data).length,
+            // Check if cache is stale
+            const age = Date.now() - cacheEntry.timestamp;
+            const isStale = age > ttl;
+
+            if (isStale) {
+              console.log(`[CacheManager] Cache expired for ${key}`, {
+                age: Math.round(age / 1000 / 60),
+                ttl: Math.round(ttl / 1000 / 60),
+              });
+              db.close();
+              resolve(null);
+              return;
+            }
+
+            console.log(`[CacheManager] Cache hit for ${key}`, {
+              age: Math.round(age / 1000 / 60) + ' minutes',
+              dataSize: JSON.stringify(cacheEntry.data).length,
+            });
+
+            db.close();
+            resolve(cacheEntry.data);
+          } catch (parseError) {
+            console.error('[CacheManager] Failed to parse cache entry:', parseError);
+            db.close();
+            resolve(null);
+          }
+        };
+
+        request.onerror = () => {
+          console.error('[CacheManager] Failed to get cache:', request.error);
+          db.close();
+          reject(request.error);
+        };
+
+        transaction.onerror = () => {
+          console.error('[CacheManager] Transaction error:', transaction.error);
+          db.close();
+          reject(transaction.error);
+        };
       });
-
-      return cacheEntry.data;
     } catch (error) {
       console.error('[CacheManager] Failed to get cache:', error);
       return null;
@@ -154,32 +245,61 @@ export class CacheManager {
   /**
    * Check if cache exists and is valid
    */
-  static has(
+  static async has(
     key: string,
     portalId: string,
     options: CacheOptions = {}
-  ): boolean {
-    return this.get(key, portalId, options) !== null;
+  ): Promise<boolean> {
+    const result = await this.get(key, portalId, options);
+    return result !== null;
   }
 
   /**
    * Get cache age in milliseconds
    */
-  static getAge(key: string, portalId: string): number | null {
+  static async getAge(key: string, portalId: string): Promise<number | null> {
     if (!this.isBrowser()) {
       return null;
     }
 
     try {
       const cacheKey = this.getCacheKey(key, portalId);
-      const cached = localStorage.getItem(cacheKey);
+      const db = await this.openDatabase();
 
-      if (!cached) {
-        return null;
-      }
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([this.STORE_NAME], 'readonly');
+        const store = transaction.objectStore(this.STORE_NAME);
+        const request = store.get(cacheKey);
 
-      const cacheEntry: CacheEntry<any> = JSON.parse(cached);
-      return Date.now() - cacheEntry.timestamp;
+        request.onsuccess = () => {
+          const cached = request.result;
+
+          if (!cached) {
+            db.close();
+            resolve(null);
+            return;
+          }
+
+          try {
+            const cacheEntry: CacheEntry<any> = JSON.parse(cached);
+            db.close();
+            resolve(Date.now() - cacheEntry.timestamp);
+          } catch (parseError) {
+            db.close();
+            resolve(null);
+          }
+        };
+
+        request.onerror = () => {
+          db.close();
+          reject(request.error);
+        };
+
+        transaction.onerror = () => {
+          db.close();
+          reject(transaction.error);
+        };
+      });
     } catch (error) {
       return null;
     }
@@ -188,12 +308,12 @@ export class CacheManager {
   /**
    * Check if cache is stale
    */
-  static isStale(
+  static async isStale(
     key: string,
     portalId: string,
     ttl: number = this.DEFAULT_TTL
-  ): boolean {
-    const age = this.getAge(key, portalId);
+  ): Promise<boolean> {
+    const age = await this.getAge(key, portalId);
     if (age === null) return true;
     return age > ttl;
   }
@@ -201,16 +321,38 @@ export class CacheManager {
   /**
    * Remove specific cache entry
    */
-  static remove(key: string, portalId: string): boolean {
+  static async remove(key: string, portalId: string): Promise<boolean> {
     if (!this.isBrowser()) {
       return false;
     }
 
     try {
       const cacheKey = this.getCacheKey(key, portalId);
-      localStorage.removeItem(cacheKey);
-      console.log(`[CacheManager] Removed cache for ${key}`);
-      return true;
+      const db = await this.openDatabase();
+
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([this.STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(this.STORE_NAME);
+        const request = store.delete(cacheKey);
+
+        request.onsuccess = () => {
+          console.log(`[CacheManager] Removed cache for ${key}`);
+          db.close();
+          resolve(true);
+        };
+
+        request.onerror = () => {
+          console.error('[CacheManager] Failed to remove cache:', request.error);
+          db.close();
+          reject(request.error);
+        };
+
+        transaction.onerror = () => {
+          console.error('[CacheManager] Transaction error:', transaction.error);
+          db.close();
+          reject(transaction.error);
+        };
+      });
     } catch (error) {
       console.error('[CacheManager] Failed to remove cache:', error);
       return false;
@@ -220,7 +362,7 @@ export class CacheManager {
   /**
    * Clear all cache for a specific portal
    */
-  static clearPortal(portalId: string): boolean {
+  static async clearPortal(portalId: string): Promise<boolean> {
     if (!this.isBrowser()) {
       return false;
     }
@@ -229,13 +371,44 @@ export class CacheManager {
       const keys = Object.values(this.KEYS);
       let cleared = 0;
 
-      keys.forEach((key) => {
+      for (const key of keys) {
         const cacheKey = this.getCacheKey(key, portalId);
-        if (localStorage.getItem(cacheKey)) {
-          localStorage.removeItem(cacheKey);
-          cleared++;
-        }
-      });
+        const db = await this.openDatabase();
+
+        await new Promise<void>((resolve, reject) => {
+          const transaction = db.transaction([this.STORE_NAME], 'readwrite');
+          const store = transaction.objectStore(this.STORE_NAME);
+          const getRequest = store.get(cacheKey);
+
+          getRequest.onsuccess = () => {
+            if (getRequest.result) {
+              const deleteRequest = store.delete(cacheKey);
+              deleteRequest.onsuccess = () => {
+                cleared++;
+                db.close();
+                resolve();
+              };
+              deleteRequest.onerror = () => {
+                db.close();
+                reject(deleteRequest.error);
+              };
+            } else {
+              db.close();
+              resolve();
+            }
+          };
+
+          getRequest.onerror = () => {
+            db.close();
+            reject(getRequest.error);
+          };
+
+          transaction.onerror = () => {
+            db.close();
+            reject(transaction.error);
+          };
+        });
+      }
 
       console.log(`[CacheManager] Cleared ${cleared} cache entries for portal ${portalId}`);
       return true;
@@ -248,27 +421,71 @@ export class CacheManager {
   /**
    * Clear all IPTV cache
    */
-  static clearAll(): boolean {
+  static async clearAll(): Promise<boolean> {
     if (!this.isBrowser()) {
       return false;
     }
 
     try {
-      const keysToRemove: string[] = [];
-      
-      // Find all IPTV cache keys
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('iptv-')) {
-          keysToRemove.push(key);
-        }
-      }
+      const db = await this.openDatabase();
 
-      // Remove all found keys
-      keysToRemove.forEach((key) => localStorage.removeItem(key));
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([this.STORE_NAME], 'readwrite');
+        const store = transaction.objectStore(this.STORE_NAME);
+        const getAllKeysRequest = store.getAllKeys();
 
-      console.log(`[CacheManager] Cleared all cache (${keysToRemove.length} entries)`);
-      return true;
+        getAllKeysRequest.onsuccess = () => {
+          const allKeys = getAllKeysRequest.result;
+          const keysToRemove = allKeys.filter((key) => 
+            typeof key === 'string' && key.startsWith('iptv-')
+          );
+
+          let removed = 0;
+          let pending = keysToRemove.length;
+
+          if (pending === 0) {
+            console.log(`[CacheManager] Cleared all cache (0 entries)`);
+            db.close();
+            resolve(true);
+            return;
+          }
+
+          keysToRemove.forEach((key) => {
+            const deleteRequest = store.delete(key);
+            
+            deleteRequest.onsuccess = () => {
+              removed++;
+              pending--;
+              if (pending === 0) {
+                console.log(`[CacheManager] Cleared all cache (${removed} entries)`);
+                db.close();
+                resolve(true);
+              }
+            };
+
+            deleteRequest.onerror = () => {
+              pending--;
+              if (pending === 0) {
+                console.log(`[CacheManager] Cleared all cache (${removed} entries)`);
+                db.close();
+                resolve(true);
+              }
+            };
+          });
+        };
+
+        getAllKeysRequest.onerror = () => {
+          console.error('[CacheManager] Failed to get all keys:', getAllKeysRequest.error);
+          db.close();
+          reject(getAllKeysRequest.error);
+        };
+
+        transaction.onerror = () => {
+          console.error('[CacheManager] Transaction error:', transaction.error);
+          db.close();
+          reject(transaction.error);
+        };
+      });
     } catch (error) {
       console.error('[CacheManager] Failed to clear all cache:', error);
       return false;
@@ -278,7 +495,7 @@ export class CacheManager {
   /**
    * Get cache statistics
    */
-  static getStats(): {
+  static async getStats(): Promise<{
     totalEntries: number;
     totalSize: number;
     entries: Array<{
@@ -287,48 +504,76 @@ export class CacheManager {
       age: number;
       portalId: string;
     }>;
-  } {
+  }> {
     if (!this.isBrowser()) {
       return { totalEntries: 0, totalSize: 0, entries: [] };
     }
 
-    const entries: Array<{
-      key: string;
-      size: number;
-      age: number;
-      portalId: string;
-    }> = [];
-    let totalSize = 0;
-
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('iptv-')) {
-          const value = localStorage.getItem(key);
-          if (value) {
-            const size = new Blob([value]).size;
-            totalSize += size;
+      const db = await this.openDatabase();
 
-            try {
-              const cacheEntry: CacheEntry<any> = JSON.parse(value);
-              entries.push({
-                key,
-                size,
-                age: Date.now() - cacheEntry.timestamp,
-                portalId: cacheEntry.portalId,
-              });
-            } catch {
-              // Invalid cache entry, skip
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([this.STORE_NAME], 'readonly');
+        const store = transaction.objectStore(this.STORE_NAME);
+        const getAllRequest = store.getAll();
+        const getAllKeysRequest = store.getAllKeys();
+
+        let allValues: any[] = [];
+        let allKeys: IDBValidKey[] = [];
+
+        getAllRequest.onsuccess = () => {
+          allValues = getAllRequest.result;
+        };
+
+        getAllKeysRequest.onsuccess = () => {
+          allKeys = getAllKeysRequest.result;
+        };
+
+        transaction.oncomplete = () => {
+          const entries: Array<{
+            key: string;
+            size: number;
+            age: number;
+            portalId: string;
+          }> = [];
+          let totalSize = 0;
+
+          allKeys.forEach((key, index) => {
+            if (typeof key === 'string' && key.startsWith('iptv-')) {
+              const value = allValues[index];
+              if (value) {
+                const size = new Blob([value]).size;
+                totalSize += size;
+
+                try {
+                  const cacheEntry: CacheEntry<any> = JSON.parse(value);
+                  entries.push({
+                    key,
+                    size,
+                    age: Date.now() - cacheEntry.timestamp,
+                    portalId: cacheEntry.portalId,
+                  });
+                } catch {
+                  // Invalid cache entry, skip
+                }
+              }
             }
-          }
-        }
-      }
+          });
 
-      return {
-        totalEntries: entries.length,
-        totalSize,
-        entries,
-      };
+          db.close();
+          resolve({
+            totalEntries: entries.length,
+            totalSize,
+            entries,
+          });
+        };
+
+        transaction.onerror = () => {
+          console.error('[CacheManager] Failed to get stats:', transaction.error);
+          db.close();
+          reject(transaction.error);
+        };
+      });
     } catch (error) {
       console.error('[CacheManager] Failed to get stats:', error);
       return { totalEntries: 0, totalSize: 0, entries: [] };
@@ -336,43 +581,43 @@ export class CacheManager {
   }
 
   // Convenience methods for specific data types
-  static setChannels(portalId: string, channels: any[]): boolean {
+  static async setChannels(portalId: string, channels: any[]): Promise<boolean> {
     return this.set(this.KEYS.CHANNELS, portalId, channels);
   }
 
-  static getChannels(portalId: string, options?: CacheOptions): any[] | null {
+  static async getChannels(portalId: string, options?: CacheOptions): Promise<any[] | null> {
     return this.get(this.KEYS.CHANNELS, portalId, options);
   }
 
-  static setEPG(portalId: string, epg: any): boolean {
+  static async setEPG(portalId: string, epg: any): Promise<boolean> {
     return this.set(this.KEYS.EPG, portalId, epg);
   }
 
-  static getEPG(portalId: string, options?: CacheOptions): any | null {
+  static async getEPG(portalId: string, options?: CacheOptions): Promise<any | null> {
     return this.get(this.KEYS.EPG, portalId, options);
   }
 
-  static setMovies(portalId: string, movies: any[]): boolean {
+  static async setMovies(portalId: string, movies: any[]): Promise<boolean> {
     return this.set(this.KEYS.MOVIES, portalId, movies);
   }
 
-  static getMovies(portalId: string, options?: CacheOptions): any[] | null {
+  static async getMovies(portalId: string, options?: CacheOptions): Promise<any[] | null> {
     return this.get(this.KEYS.MOVIES, portalId, options);
   }
 
-  static setSeries(portalId: string, series: any[]): boolean {
+  static async setSeries(portalId: string, series: any[]): Promise<boolean> {
     return this.set(this.KEYS.SERIES, portalId, series);
   }
 
-  static getSeries(portalId: string, options?: CacheOptions): any[] | null {
+  static async getSeries(portalId: string, options?: CacheOptions): Promise<any[] | null> {
     return this.get(this.KEYS.SERIES, portalId, options);
   }
 
-  static setGenres(portalId: string, genres: any[]): boolean {
+  static async setGenres(portalId: string, genres: any[]): Promise<boolean> {
     return this.set(this.KEYS.GENRES, portalId, genres);
   }
 
-  static getGenres(portalId: string, options?: CacheOptions): any[] | null {
+  static async getGenres(portalId: string, options?: CacheOptions): Promise<any[] | null> {
     return this.get(this.KEYS.GENRES, portalId, options);
   }
 }
