@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { CacheManager } from '@/lib/cache-manager';
 
 export interface Portal {
   id: string;
@@ -115,11 +116,18 @@ interface IPTVStore {
   filteredChannels: Channel[];
   searchQuery: string;
   selectedCategory: string | null;
+  isLoadingChannels: boolean;
+  channelsError: string | null;
   setChannels: (channels: Channel[]) => void;
   setCurrentChannel: (channel: Channel | null) => void;
   setSearchQuery: (query: string) => void;
   setSelectedCategory: (category: string | null) => void;
   toggleFavorite: (channelId: string) => void;
+  setIsLoadingChannels: (loading: boolean) => void;
+  setChannelsError: (error: string | null) => void;
+  loadChannelsFromCache: () => boolean;
+  saveChannelsToCache: (channels: Channel[]) => void;
+  clearChannelsCache: () => void;
 
   // Movie Management
   movies: Movie[];
@@ -127,11 +135,17 @@ interface IPTVStore {
   filteredMovies: Movie[];
   movieSearchQuery: string;
   selectedMovieCategory: string | null;
+  isLoadingMovies: boolean;
+  moviesError: string | null;
   setMovies: (movies: Movie[]) => void;
   setCurrentMovie: (movie: Movie | null) => void;
   setMovieSearchQuery: (query: string) => void;
   setSelectedMovieCategory: (category: string | null) => void;
   toggleMovieFavorite: (movieId: string) => void;
+  setIsLoadingMovies: (loading: boolean) => void;
+  setMoviesError: (error: string | null) => void;
+  loadMoviesFromCache: () => boolean;
+  saveMoviesToCache: (movies: Movie[]) => void;
 
   // Series Management
   series: Series[];
@@ -139,11 +153,17 @@ interface IPTVStore {
   filteredSeries: Series[];
   seriesSearchQuery: string;
   selectedSeriesCategory: string | null;
+  isLoadingSeries: boolean;
+  seriesError: string | null;
   setSeries: (series: Series[]) => void;
   setCurrentSeries: (series: Series | null) => void;
   setSeriesSearchQuery: (query: string) => void;
   setSelectedSeriesCategory: (category: string | null) => void;
   toggleSeriesFavorite: (seriesId: string) => void;
+  setIsLoadingSeries: (loading: boolean) => void;
+  setSeriesError: (error: string | null) => void;
+  loadSeriesFromCache: () => boolean;
+  saveSeriesToCache: (series: Series[]) => void;
 
   // EPG Management
   epgData: Map<string, EPGProgram[]>;
@@ -179,7 +199,25 @@ export const useIPTVStore = create<IPTVStore>()(
       // Portal Management
       portals: [],
       activePortal: null,
-      setActivePortal: (portal) => set({ activePortal: portal }),
+      setActivePortal: (portal) => {
+        const prevPortal = get().activePortal;
+        
+        // Clear cache when switching portals
+        if (prevPortal && portal && prevPortal.id !== portal.id) {
+          console.log('[Store] Switching portals, clearing cache');
+          CacheManager.clearPortal(prevPortal.id);
+          set({ 
+            channels: [], 
+            filteredChannels: [],
+            movies: [],
+            filteredMovies: [],
+            series: [],
+            filteredSeries: [],
+          });
+        }
+        
+        set({ activePortal: portal });
+      },
       addPortal: (portal) =>
         set((state) => ({ portals: [...state.portals, portal] })),
       updatePortal: (id, updates) =>
@@ -193,10 +231,15 @@ export const useIPTVStore = create<IPTVStore>()(
               : state.activePortal,
         })),
       removePortal: (id) =>
-        set((state) => ({
-          portals: state.portals.filter((p) => p.id !== id),
-          activePortal: state.activePortal?.id === id ? null : state.activePortal,
-        })),
+        set((state) => {
+          // Clear cache for removed portal
+          CacheManager.clearPortal(id);
+          
+          return {
+            portals: state.portals.filter((p) => p.id !== id),
+            activePortal: state.activePortal?.id === id ? null : state.activePortal,
+          };
+        }),
 
       // Channel Management (Live TV)
       channels: [],
@@ -204,10 +247,49 @@ export const useIPTVStore = create<IPTVStore>()(
       filteredChannels: [],
       searchQuery: '',
       selectedCategory: null,
+      isLoadingChannels: false,
+      channelsError: null,
       setChannels: (channels) => {
-        set({ channels, filteredChannels: channels });
+        set({ channels, filteredChannels: channels, channelsError: null });
+        
+        // Save to cache
+        const { activePortal } = get();
+        if (activePortal) {
+          CacheManager.setChannels(activePortal.id, channels);
+        }
       },
       setCurrentChannel: (channel) => set({ currentChannel: channel }),
+      setIsLoadingChannels: (loading) => set({ isLoadingChannels: loading }),
+      setChannelsError: (error) => set({ channelsError: error }),
+      loadChannelsFromCache: () => {
+        const { activePortal } = get();
+        if (!activePortal) return false;
+
+        const cachedChannels = CacheManager.getChannels(activePortal.id);
+        if (cachedChannels && cachedChannels.length > 0) {
+          console.log(`[Store] Loaded ${cachedChannels.length} channels from cache`);
+          set({ 
+            channels: cachedChannels, 
+            filteredChannels: cachedChannels,
+            channelsError: null,
+          });
+          return true;
+        }
+        
+        return false;
+      },
+      saveChannelsToCache: (channels) => {
+        const { activePortal } = get();
+        if (activePortal) {
+          CacheManager.setChannels(activePortal.id, channels);
+        }
+      },
+      clearChannelsCache: () => {
+        const { activePortal } = get();
+        if (activePortal) {
+          CacheManager.remove('iptv-channels', activePortal.id);
+        }
+      },
       setSearchQuery: (query) => {
         set({ searchQuery: query });
         const { channels, selectedCategory } = get();
@@ -262,10 +344,43 @@ export const useIPTVStore = create<IPTVStore>()(
       filteredMovies: [],
       movieSearchQuery: '',
       selectedMovieCategory: null,
+      isLoadingMovies: false,
+      moviesError: null,
       setMovies: (movies) => {
-        set({ movies, filteredMovies: movies });
+        set({ movies, filteredMovies: movies, moviesError: null });
+        
+        // Save to cache
+        const { activePortal } = get();
+        if (activePortal) {
+          CacheManager.setMovies(activePortal.id, movies);
+        }
       },
       setCurrentMovie: (movie) => set({ currentMovie: movie }),
+      setIsLoadingMovies: (loading) => set({ isLoadingMovies: loading }),
+      setMoviesError: (error) => set({ moviesError: error }),
+      loadMoviesFromCache: () => {
+        const { activePortal } = get();
+        if (!activePortal) return false;
+
+        const cachedMovies = CacheManager.getMovies(activePortal.id);
+        if (cachedMovies && cachedMovies.length > 0) {
+          console.log(`[Store] Loaded ${cachedMovies.length} movies from cache`);
+          set({ 
+            movies: cachedMovies, 
+            filteredMovies: cachedMovies,
+            moviesError: null,
+          });
+          return true;
+        }
+        
+        return false;
+      },
+      saveMoviesToCache: (movies) => {
+        const { activePortal } = get();
+        if (activePortal) {
+          CacheManager.setMovies(activePortal.id, movies);
+        }
+      },
       setMovieSearchQuery: (query) => {
         set({ movieSearchQuery: query });
         const { movies, selectedMovieCategory } = get();
@@ -320,10 +435,43 @@ export const useIPTVStore = create<IPTVStore>()(
       filteredSeries: [],
       seriesSearchQuery: '',
       selectedSeriesCategory: null,
+      isLoadingSeries: false,
+      seriesError: null,
       setSeries: (series) => {
-        set({ series, filteredSeries: series });
+        set({ series, filteredSeries: series, seriesError: null });
+        
+        // Save to cache
+        const { activePortal } = get();
+        if (activePortal) {
+          CacheManager.setSeries(activePortal.id, series);
+        }
       },
       setCurrentSeries: (series) => set({ currentSeries: series }),
+      setIsLoadingSeries: (loading) => set({ isLoadingSeries: loading }),
+      setSeriesError: (error) => set({ seriesError: error }),
+      loadSeriesFromCache: () => {
+        const { activePortal } = get();
+        if (!activePortal) return false;
+
+        const cachedSeries = CacheManager.getSeries(activePortal.id);
+        if (cachedSeries && cachedSeries.length > 0) {
+          console.log(`[Store] Loaded ${cachedSeries.length} series from cache`);
+          set({ 
+            series: cachedSeries, 
+            filteredSeries: cachedSeries,
+            seriesError: null,
+          });
+          return true;
+        }
+        
+        return false;
+      },
+      saveSeriesToCache: (series) => {
+        const { activePortal } = get();
+        if (activePortal) {
+          CacheManager.setSeries(activePortal.id, series);
+        }
+      },
       setSeriesSearchQuery: (query) => {
         set({ seriesSearchQuery: query });
         const { series, selectedSeriesCategory } = get();
