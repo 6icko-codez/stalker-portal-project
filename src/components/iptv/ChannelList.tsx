@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useIPTVStore } from '@/lib/stores/useIPTVStore';
 import { Button } from '@/components/ui/button';
@@ -46,6 +46,8 @@ export function ChannelList() {
     setChannelsError,
     loadChannelsFromCache,
     clearChannelsCache,
+    setScrollPosition,
+    getScrollPosition,
   } = useIPTVStore();
 
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -53,6 +55,18 @@ export function ChannelList() {
   const [forceRefresh, setForceRefresh] = useState(false);
   const parentRef = useRef<HTMLDivElement>(null);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(searchQuery);
+  const [isRestoringScroll, setIsRestoringScroll] = useState(false);
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1920);
+
+  // Handle window resize for responsive columns
+  useEffect(() => {
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Debounce search query
   useEffect(() => {
@@ -208,8 +222,18 @@ export function ChannelList() {
     toggleFavorite(channelId);
   };
 
-  // Virtual scrolling configuration
-  const columnCount = viewMode === 'grid' ? 4 : 1;
+  // Responsive column count based on window width
+  const columnCount = useMemo(() => {
+    if (viewMode === 'list') return 1;
+    
+    // Responsive breakpoints for grid view
+    if (windowWidth < 640) return 2;  // sm
+    if (windowWidth < 768) return 3;  // md
+    if (windowWidth < 1024) return 4; // lg
+    if (windowWidth < 1280) return 5; // xl
+    return 6; // 2xl and above
+  }, [viewMode, windowWidth]);
+
   const itemsPerRow = columnCount;
   
   // Group items into rows for grid view
@@ -221,12 +245,77 @@ export function ChannelList() {
     return result;
   }, [filteredChannels, itemsPerRow]);
 
+  // Virtual scrolling configuration with optimized settings
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => (viewMode === 'grid' ? 180 : 80),
-    overscan: 5,
+    estimateSize: useCallback(() => {
+      // Dynamic row height based on view mode and window width
+      if (viewMode === 'list') return 88;
+      
+      // Grid view: calculate based on aspect ratio and padding
+      const baseWidth = windowWidth / columnCount;
+      const aspectRatio = 16 / 9;
+      const imageHeight = (baseWidth - 32) / aspectRatio; // Account for padding
+      const textHeight = 60; // Text and badges height
+      return imageHeight + textHeight + 32; // Add padding
+    }, [viewMode, windowWidth, columnCount]),
+    overscan: 10, // Increased overscan for smoother scrolling
+    measureElement:
+      typeof window !== 'undefined' && navigator.userAgent.indexOf('Firefox') === -1
+        ? (element) => element?.getBoundingClientRect().height
+        : undefined,
   });
+
+  // Save scroll position when scrolling
+  const handleScroll = useCallback(() => {
+    if (activePortal && parentRef.current && !isRestoringScroll) {
+      const scrollOffset = parentRef.current.scrollTop;
+      setScrollPosition(activePortal.id, 'channels', scrollOffset);
+    }
+  }, [activePortal, isRestoringScroll, setScrollPosition]);
+
+  // Attach scroll listener
+  useEffect(() => {
+    const scrollElement = parentRef.current;
+    if (scrollElement) {
+      scrollElement.addEventListener('scroll', handleScroll);
+      return () => scrollElement.removeEventListener('scroll', handleScroll);
+    }
+  }, [handleScroll]);
+
+  // Restore scroll position when portal changes or channels load
+  useEffect(() => {
+    if (activePortal && parentRef.current && filteredChannels.length > 0 && !isLoadingChannels) {
+      const savedPosition = getScrollPosition(activePortal.id, 'channels');
+      
+      if (savedPosition > 0) {
+        setIsRestoringScroll(true);
+        
+        // Use requestAnimationFrame to ensure DOM is ready
+        requestAnimationFrame(() => {
+          if (parentRef.current) {
+            parentRef.current.scrollTop = savedPosition;
+            
+            // Reset flag after a short delay
+            setTimeout(() => {
+              setIsRestoringScroll(false);
+            }, 100);
+          }
+        });
+      }
+    }
+  }, [activePortal, filteredChannels.length, isLoadingChannels, getScrollPosition]);
+
+  // Save scroll position before unmounting
+  useEffect(() => {
+    return () => {
+      if (activePortal && parentRef.current) {
+        const scrollOffset = parentRef.current.scrollTop;
+        setScrollPosition(activePortal.id, 'channels', scrollOffset);
+      }
+    };
+  }, [activePortal, setScrollPosition]);
 
   return (
     <div className="flex flex-col h-full">
@@ -349,7 +438,12 @@ export function ChannelList() {
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-4">
+                    <div 
+                      className="grid gap-4 p-4"
+                      style={{
+                        gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
+                      }}
+                    >
                       {row.map((channel) => (
                         <div
                           key={channel.id}
