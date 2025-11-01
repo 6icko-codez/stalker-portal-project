@@ -5,6 +5,8 @@ import Hls from 'hls.js';
 import { useIPTVStore } from '@/lib/stores/useIPTVStore';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { Spinner } from '@/components/ui/spinner';
+import { ErrorMessage } from '@/components/ui/error-message';
 import {
   Play,
   Pause,
@@ -38,6 +40,14 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
   const hlsRef = useRef<Hls | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [controlsTimeout, setControlsTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [error, setError] = useState<{
+    title: string;
+    message: string;
+    type: 'error' | 'warning';
+  } | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const maxRetries = 3;
 
   const { playerState, updatePlayerState, currentChannel, currentMovie, currentSeries } = useIPTVStore();
 
@@ -62,21 +72,40 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
       video.load(); // This clears the buffer
       video.currentTime = 0;
     }
+    
+    setIsBuffering(false);
   };
 
-  useEffect(() => {
-    if (!videoRef.current || !effectiveStreamUrl) {
-      cleanupPlayer();
-      return;
-    }
-
-    const video = videoRef.current;
-
-    // Clean up any previous stream before loading new one
+  // Retry loading the stream
+  const retryStream = () => {
+    console.log(`[VideoPlayer] Retrying stream (attempt ${retryCount + 1}/${maxRetries})`);
+    setError(null);
+    setRetryCount((prev) => prev + 1);
     cleanupPlayer();
+    
+    // Trigger re-render by updating a state
+    setTimeout(() => {
+      if (effectiveStreamUrl) {
+        loadStream(effectiveStreamUrl);
+      }
+    }, 1000);
+  };
+
+  // Load stream with error handling
+  const loadStream = (url: string) => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    console.log('[VideoPlayer] Loading stream:', {
+      url: url.substring(0, 100) + (url.length > 100 ? '...' : ''),
+      isM3U8: url.includes('.m3u8'),
+    });
+
+    setIsBuffering(true);
+    setError(null);
 
     // Check if HLS is supported
-    if (effectiveStreamUrl.includes('.m3u8')) {
+    if (url.includes('.m3u8')) {
       if (Hls.isSupported()) {
         const hls = new Hls({
           enableWorker: true,
@@ -88,28 +117,87 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
           maxBufferHole: 0.5,
         });
 
-        hls.loadSource(effectiveStreamUrl);
+        hls.loadSource(url);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          console.log('[VideoPlayer] Manifest parsed successfully');
+          setIsBuffering(false);
+          setRetryCount(0); // Reset retry count on success
+          
           if (playerState.isPlaying) {
-            video.play().catch(err => console.error('Play error:', err));
+            video.play().catch(err => {
+              console.error('[VideoPlayer] Play error:', err);
+              setError({
+                title: 'Playback Error',
+                message: 'Could not start playback. Click to retry.',
+                type: 'warning',
+              });
+            });
           }
         });
 
         hls.on(Hls.Events.ERROR, (event, data) => {
+          console.error('[VideoPlayer] HLS Error:', {
+            type: data.type,
+            details: data.details,
+            fatal: data.fatal,
+            url: data.url,
+            response: data.response,
+          });
+
           if (data.fatal) {
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                console.error('Network error, trying to recover...');
-                hls.startLoad();
+                console.error('[VideoPlayer] Network error, attempting recovery...');
+                
+                if (retryCount < maxRetries) {
+                  setError({
+                    title: 'Network Error',
+                    message: 'Connection lost. Attempting to reconnect...',
+                    type: 'warning',
+                  });
+                  setTimeout(() => {
+                    hls.startLoad();
+                  }, 1000);
+                } else {
+                  setError({
+                    title: 'Network Error',
+                    message: 'Could not connect to the stream. Please check your internet connection and try again.',
+                    type: 'error',
+                  });
+                  setIsBuffering(false);
+                }
                 break;
+                
               case Hls.ErrorTypes.MEDIA_ERROR:
-                console.error('Media error, trying to recover...');
-                hls.recoverMediaError();
+                console.error('[VideoPlayer] Media error, attempting recovery...');
+                
+                if (retryCount < maxRetries) {
+                  setError({
+                    title: 'Media Error',
+                    message: 'Stream playback issue. Attempting to recover...',
+                    type: 'warning',
+                  });
+                  hls.recoverMediaError();
+                } else {
+                  setError({
+                    title: 'Media Error',
+                    message: 'The stream format is not supported or corrupted. Please try a different channel.',
+                    type: 'error',
+                  });
+                  setIsBuffering(false);
+                }
                 break;
+                
               default:
-                console.error('Fatal error, cannot recover');
+                console.error('[VideoPlayer] Fatal error, cannot recover');
+                setError({
+                  title: 'Stream Error',
+                  message: 'The stream is not available. This may be a temporary issue with the channel.',
+                  type: 'error',
+                });
+                setIsBuffering(false);
                 cleanupPlayer();
                 break;
             }
@@ -117,24 +205,92 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
         });
 
         hlsRef.current = hls;
-
-        return () => {
-          cleanupPlayer();
-        };
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Native HLS support (Safari)
-        video.src = effectiveStreamUrl;
+        console.log('[VideoPlayer] Using native HLS support');
+        video.src = url;
+        
+        video.addEventListener('loadedmetadata', () => {
+          console.log('[VideoPlayer] Metadata loaded');
+          setIsBuffering(false);
+          setRetryCount(0);
+        });
+        
+        video.addEventListener('error', (e) => {
+          console.error('[VideoPlayer] Video error:', e);
+          setError({
+            title: 'Playback Error',
+            message: 'Could not load the stream. The channel may be unavailable.',
+            type: 'error',
+          });
+          setIsBuffering(false);
+        });
+        
         if (playerState.isPlaying) {
-          video.play().catch(err => console.error('Play error:', err));
+          video.play().catch(err => {
+            console.error('[VideoPlayer] Play error:', err);
+            setError({
+              title: 'Playback Error',
+              message: 'Could not start playback. Click to retry.',
+              type: 'warning',
+            });
+          });
         }
+      } else {
+        console.error('[VideoPlayer] HLS not supported');
+        setError({
+          title: 'Not Supported',
+          message: 'Your browser does not support HLS streaming. Please try a different browser.',
+          type: 'error',
+        });
+        setIsBuffering(false);
       }
     } else {
       // Direct stream (MP4, etc.)
-      video.src = effectiveStreamUrl;
+      console.log('[VideoPlayer] Using direct stream');
+      video.src = url;
+      
+      video.addEventListener('loadedmetadata', () => {
+        console.log('[VideoPlayer] Metadata loaded');
+        setIsBuffering(false);
+        setRetryCount(0);
+      });
+      
+      video.addEventListener('error', (e) => {
+        console.error('[VideoPlayer] Video error:', e);
+        setError({
+          title: 'Playback Error',
+          message: 'Could not load the stream. The channel may be unavailable.',
+          type: 'error',
+        });
+        setIsBuffering(false);
+      });
+      
       if (playerState.isPlaying) {
-        video.play().catch(err => console.error('Play error:', err));
+        video.play().catch(err => {
+          console.error('[VideoPlayer] Play error:', err);
+          setError({
+            title: 'Playback Error',
+            message: 'Could not start playback. Click to retry.',
+            type: 'warning',
+          });
+        });
       }
     }
+  };
+
+  useEffect(() => {
+    if (!videoRef.current || !effectiveStreamUrl) {
+      cleanupPlayer();
+      setError(null);
+      return;
+    }
+
+    // Clean up any previous stream before loading new one
+    cleanupPlayer();
+    
+    // Load the new stream
+    loadStream(effectiveStreamUrl);
 
     return () => {
       cleanupPlayer();
@@ -154,6 +310,7 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
 
     const handlePlay = () => {
       updatePlayerState({ isPlaying: true });
+      setIsBuffering(false);
     };
 
     const handlePause = () => {
@@ -167,16 +324,37 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
       });
     };
 
+    const handleWaiting = () => {
+      console.log('[VideoPlayer] Buffering...');
+      setIsBuffering(true);
+    };
+
+    const handleCanPlay = () => {
+      console.log('[VideoPlayer] Can play');
+      setIsBuffering(false);
+    };
+
+    const handleLoadStart = () => {
+      console.log('[VideoPlayer] Load start');
+      setIsBuffering(true);
+    };
+
     video.addEventListener('timeupdate', handleTimeUpdate);
     video.addEventListener('play', handlePlay);
     video.addEventListener('pause', handlePause);
     video.addEventListener('volumechange', handleVolumeChange);
+    video.addEventListener('waiting', handleWaiting);
+    video.addEventListener('canplay', handleCanPlay);
+    video.addEventListener('loadstart', handleLoadStart);
 
     return () => {
       video.removeEventListener('timeupdate', handleTimeUpdate);
       video.removeEventListener('play', handlePlay);
       video.removeEventListener('pause', handlePause);
       video.removeEventListener('volumechange', handleVolumeChange);
+      video.removeEventListener('waiting', handleWaiting);
+      video.removeEventListener('canplay', handleCanPlay);
+      video.removeEventListener('loadstart', handleLoadStart);
     };
   }, [updatePlayerState]);
 
@@ -474,12 +652,34 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
         </div>
       </div>
 
+      {/* Error Display */}
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/80 p-6">
+          <ErrorMessage
+            title={error.title}
+            message={error.message}
+            type={error.type}
+            onRetry={retryCount < maxRetries ? retryStream : undefined}
+            onDismiss={() => setError(null)}
+            className="max-w-md"
+            retryLabel={`Retry (${retryCount}/${maxRetries})`}
+          />
+        </div>
+      )}
+
       {/* Loading/Buffering Indicator */}
-      {!streamUrl && (
+      {!error && isBuffering && effectiveStreamUrl && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+          <Spinner size="xl" label="Loading stream..." />
+        </div>
+      )}
+
+      {/* No Stream Selected */}
+      {!error && !effectiveStreamUrl && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/50">
           <div className="text-white text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4" />
-            <p>Select a channel to start watching</p>
+            <Spinner size="lg" className="mb-4" />
+            <p className="text-lg">Select a channel to start watching</p>
           </div>
         </div>
       )}
