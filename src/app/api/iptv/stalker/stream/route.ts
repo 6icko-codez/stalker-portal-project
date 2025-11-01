@@ -9,6 +9,8 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { portalUrl, macAddress, timezone, cmd, channelId } = body;
 
+    console.log(`[Stream API ${requestId}] ========== REQUEST BODY ==========`);
+    console.log(`[Stream API ${requestId}] Full request body:`, JSON.stringify(body, null, 2));
     console.log(`[Stream API ${requestId}] Request parameters:`, {
       portalUrl,
       macAddress,
@@ -16,8 +18,11 @@ export async function POST(request: NextRequest) {
       cmd: cmd?.substring(0, 100) + (cmd?.length > 100 ? '...' : ''),
       channelId,
       channelIdType: typeof channelId,
+      channelIdValue: channelId,
       channelIdLength: channelId?.toString().length,
+      isChannelIdEmpty: !channelId || channelId === '' || channelId === 'undefined',
     });
+    console.log(`[Stream API ${requestId}] ========== END REQUEST BODY ==========`);
 
     // Validate required parameters
     if (!portalUrl || !macAddress || !cmd || !channelId) {
