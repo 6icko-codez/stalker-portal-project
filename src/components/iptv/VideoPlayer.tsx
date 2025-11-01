@@ -39,28 +39,61 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
   const [showControls, setShowControls] = useState(true);
   const [controlsTimeout, setControlsTimeout] = useState<NodeJS.Timeout | null>(null);
 
-  const { playerState, updatePlayerState, currentChannel } = useIPTVStore();
+  const { playerState, updatePlayerState, currentChannel, currentMovie, currentSeries } = useIPTVStore();
+
+  // Determine current content and stream URL
+  const currentContent = currentChannel || currentMovie || currentSeries;
+  const effectiveStreamUrl = streamUrl || currentContent?.streamUrl;
+
+  // Cleanup function to properly destroy HLS and reset video
+  const cleanupPlayer = () => {
+    const video = videoRef.current;
+    
+    // Destroy existing HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    // Reset video element
+    if (video) {
+      video.pause();
+      video.removeAttribute('src');
+      video.load(); // This clears the buffer
+      video.currentTime = 0;
+    }
+  };
 
   useEffect(() => {
-    if (!videoRef.current || !streamUrl) return;
+    if (!videoRef.current || !effectiveStreamUrl) {
+      cleanupPlayer();
+      return;
+    }
 
     const video = videoRef.current;
 
+    // Clean up any previous stream before loading new one
+    cleanupPlayer();
+
     // Check if HLS is supported
-    if (streamUrl.includes('.m3u8')) {
+    if (effectiveStreamUrl.includes('.m3u8')) {
       if (Hls.isSupported()) {
         const hls = new Hls({
           enableWorker: true,
           lowLatencyMode: true,
           backBufferLength: 90,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          maxBufferSize: 60 * 1000 * 1000, // 60MB
+          maxBufferHole: 0.5,
         });
 
-        hls.loadSource(streamUrl);
+        hls.loadSource(effectiveStreamUrl);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (playerState.isPlaying) {
-            video.play();
+            video.play().catch(err => console.error('Play error:', err));
           }
         });
 
@@ -77,7 +110,7 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
                 break;
               default:
                 console.error('Fatal error, cannot recover');
-                hls.destroy();
+                cleanupPlayer();
                 break;
             }
           }
@@ -86,23 +119,27 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
         hlsRef.current = hls;
 
         return () => {
-          hls.destroy();
+          cleanupPlayer();
         };
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         // Native HLS support (Safari)
-        video.src = streamUrl;
+        video.src = effectiveStreamUrl;
+        if (playerState.isPlaying) {
+          video.play().catch(err => console.error('Play error:', err));
+        }
       }
     } else {
       // Direct stream (MP4, etc.)
-      video.src = streamUrl;
+      video.src = effectiveStreamUrl;
+      if (playerState.isPlaying) {
+        video.play().catch(err => console.error('Play error:', err));
+      }
     }
 
     return () => {
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-      }
+      cleanupPlayer();
     };
-  }, [streamUrl]);
+  }, [effectiveStreamUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -257,8 +294,8 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
         onClick={togglePlay}
       />
 
-      {/* Channel Info Overlay */}
-      {currentChannel && (
+      {/* Content Info Overlay */}
+      {currentContent && (
         <div
           className={cn(
             'absolute top-0 left-0 right-0 p-6 bg-gradient-to-b from-black/80 to-transparent transition-opacity duration-300',
@@ -266,19 +303,29 @@ export function VideoPlayer({ streamUrl, poster, className }: VideoPlayerProps) 
           )}
         >
           <div className="flex items-start gap-4">
-            {currentChannel.logo && (
+            {(currentContent.logo || (currentMovie || currentSeries)?.poster) && (
               <img
-                src={currentChannel.logo}
-                alt={currentChannel.name}
+                src={currentContent.logo || (currentMovie || currentSeries)?.poster || ''}
+                alt={currentContent.name}
                 className="w-16 h-16 rounded-lg object-cover"
               />
             )}
             <div>
               <h2 className="text-2xl font-bold text-white">
-                {currentChannel.name}
+                {currentContent.name}
               </h2>
-              {currentChannel.number && (
+              {currentChannel?.number && (
                 <p className="text-white/70">Channel {currentChannel.number}</p>
+              )}
+              {(currentMovie || currentSeries) && (
+                <div className="flex items-center gap-2 mt-1">
+                  {(currentMovie?.year || currentSeries?.year) && (
+                    <span className="text-white/70">{currentMovie?.year || currentSeries?.year}</span>
+                  )}
+                  {(currentMovie?.ratingImdb || currentSeries?.ratingImdb) && (
+                    <span className="text-white/70">⭐ {currentMovie?.ratingImdb || currentSeries?.ratingImdb}</span>
+                  )}
+                </div>
               )}
             </div>
           </div>

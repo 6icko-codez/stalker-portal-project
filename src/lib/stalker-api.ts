@@ -18,6 +18,48 @@ export interface StalkerChannel {
   use_load_balancing?: number;
 }
 
+export interface StalkerMovie {
+  id: string;
+  name: string;
+  o_name?: string;
+  description?: string;
+  pic?: string;
+  logo?: string;
+  cmd: string;
+  year?: string;
+  director?: string;
+  actors?: string;
+  category_id?: string;
+  rating_imdb?: string;
+  rating_kinopoisk?: string;
+  duration?: string;
+  genre_id_1?: string;
+  genre_id_2?: string;
+  genre_id_3?: string;
+  genre_id_4?: string;
+}
+
+export interface StalkerSeries {
+  id: string;
+  name: string;
+  o_name?: string;
+  description?: string;
+  pic?: string;
+  logo?: string;
+  cmd: string;
+  year?: string;
+  director?: string;
+  actors?: string;
+  category_id?: string;
+  rating_imdb?: string;
+  rating_kinopoisk?: string;
+  genre_id_1?: string;
+  genre_id_2?: string;
+  genre_id_3?: string;
+  genre_id_4?: string;
+  series?: any[];
+}
+
 export interface StalkerGenre {
   id: string;
   title: string;
@@ -206,6 +248,181 @@ export class StalkerAPI {
     } catch (error) {
       console.error('Get short EPG failed:', error);
       return {};
+    }
+  }
+
+  async getVODCategories(): Promise<StalkerGenre[]> {
+    try {
+      const data = await this.makeRequest('vod', {
+        action: 'get_categories',
+        JsHttpRequest: '1-xml',
+      });
+
+      return data.js || [];
+    } catch (error) {
+      console.error('Get VOD categories failed:', error);
+      return [];
+    }
+  }
+
+  async getMovies(category?: string, page: number = 1): Promise<StalkerMovie[]> {
+    try {
+      const params: Record<string, any> = {
+        action: 'get_ordered_list',
+        type: 'vod',
+        p: page,
+        JsHttpRequest: '1-xml',
+      };
+
+      if (category) {
+        params.category = category;
+      }
+
+      const data = await this.makeRequest('vod', params);
+
+      return data.js?.data || [];
+    } catch (error) {
+      console.error('Get movies failed:', error);
+      return [];
+    }
+  }
+
+  async getAllMovies(): Promise<StalkerMovie[]> {
+    try {
+      const data = await this.makeRequest('vod', {
+        action: 'get_ordered_list',
+        type: 'vod',
+        p: 1,
+        JsHttpRequest: '1-xml',
+      });
+
+      return data.js?.data || [];
+    } catch (error) {
+      console.error('Get all movies failed:', error);
+      return [];
+    }
+  }
+
+  async getSeriesCategories(): Promise<StalkerGenre[]> {
+    try {
+      const data = await this.makeRequest('series', {
+        action: 'get_categories',
+        JsHttpRequest: '1-xml',
+      });
+
+      return data.js || [];
+    } catch (error) {
+      console.error('Get series categories failed:', error);
+      return [];
+    }
+  }
+
+  async getSeries(category?: string, page: number = 1): Promise<StalkerSeries[]> {
+    try {
+      const params: Record<string, any> = {
+        action: 'get_ordered_list',
+        type: 'series',
+        p: page,
+        JsHttpRequest: '1-xml',
+      };
+
+      if (category) {
+        params.category = category;
+      }
+
+      const data = await this.makeRequest('series', params);
+
+      return data.js?.data || [];
+    } catch (error) {
+      console.error('Get series failed:', error);
+      return [];
+    }
+  }
+
+  async getAllSeries(): Promise<StalkerSeries[]> {
+    try {
+      const data = await this.makeRequest('series', {
+        action: 'get_ordered_list',
+        type: 'series',
+        p: 1,
+        JsHttpRequest: '1-xml',
+      });
+
+      return data.js?.data || [];
+    } catch (error) {
+      console.error('Get all series failed:', error);
+      return [];
+    }
+  }
+
+  async getSeriesSeasons(seriesId: string): Promise<any[]> {
+    try {
+      const data = await this.makeRequest('series', {
+        action: 'get_ordered_list',
+        movie_id: seriesId,
+        season_id: 0,
+        episode_id: 0,
+        JsHttpRequest: '1-xml',
+      });
+
+      return data.js?.data || [];
+    } catch (error) {
+      console.error('Get series seasons failed:', error);
+      return [];
+    }
+  }
+
+  async createVODLink(cmd: string, movieId: string): Promise<string | null> {
+    try {
+      const data = await this.makeRequest('vod', {
+        action: 'create_link',
+        cmd: encodeURIComponent(cmd),
+        series: '',
+        forced_storage: 'undefined',
+        disable_ad: '0',
+        download: '0',
+        JsHttpRequest: '1-xml',
+      });
+
+      if (data.js?.cmd) {
+        // Extract the actual stream URL from the cmd
+        const streamUrl = data.js.cmd.split(' ')[0];
+        return streamUrl;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Create VOD link failed:', error);
+      return null;
+    }
+  }
+
+  async createSeriesLink(cmd: string, seriesId: string, seasonId?: string, episodeId?: string): Promise<string | null> {
+    try {
+      const params: Record<string, any> = {
+        action: 'create_link',
+        cmd: encodeURIComponent(cmd),
+        forced_storage: 'undefined',
+        disable_ad: '0',
+        download: '0',
+        JsHttpRequest: '1-xml',
+      };
+
+      if (seasonId) params.season = seasonId;
+      if (episodeId) params.episode = episodeId;
+
+      const data = await this.makeRequest('series', params);
+
+      if (data.js?.cmd) {
+        // Extract the actual stream URL from the cmd
+        const streamUrl = data.js.cmd.split(' ')[0];
+        return streamUrl;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Create series link failed:', error);
+      return null;
     }
   }
 
