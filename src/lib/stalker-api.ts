@@ -145,6 +145,72 @@ export class StalkerAPI {
     }
   }
 
+  async getAccountInfo(): Promise<any> {
+    try {
+      const data = await this.makeRequest('account', {
+        action: 'get_main_info',
+        JsHttpRequest: '1-xml',
+      });
+
+      return data.js || null;
+    } catch (error) {
+      console.error('Get account info failed:', error);
+      return null;
+    }
+  }
+
+  async getSubscriptionInfo(): Promise<{
+    expiryDate?: string;
+    status?: string;
+    daysRemaining?: number;
+    accountInfo?: any;
+  } | null> {
+    try {
+      // Try to get account info which may contain subscription details
+      const accountInfo = await this.getAccountInfo();
+      
+      if (accountInfo) {
+        const result: any = {
+          accountInfo,
+        };
+
+        // Check for common expiry fields
+        if (accountInfo.expire_date || accountInfo.expiry_date || accountInfo.account_expire) {
+          const expiryDate = accountInfo.expire_date || accountInfo.expiry_date || accountInfo.account_expire;
+          result.expiryDate = expiryDate;
+          
+          // Calculate days remaining if we have a valid date
+          if (expiryDate && expiryDate !== '0' && expiryDate !== 'unlimited') {
+            try {
+              const expiry = new Date(expiryDate);
+              const now = new Date();
+              const diffTime = expiry.getTime() - now.getTime();
+              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+              result.daysRemaining = diffDays;
+              result.status = diffDays > 0 ? 'active' : 'expired';
+            } catch (e) {
+              // Date parsing failed, just return what we have
+            }
+          } else if (expiryDate === 'unlimited') {
+            result.status = 'unlimited';
+          }
+        }
+
+        // Check for status field
+        if (accountInfo.status) {
+          result.status = accountInfo.status;
+        }
+
+        return result;
+      }
+
+      return null;
+    } catch (error) {
+      console.error('Get subscription info failed:', error);
+      return null;
+    }
+  }
+
   async getGenres(): Promise<StalkerGenre[]> {
     try {
       const data = await this.makeRequest('itv', {
@@ -209,7 +275,20 @@ export class StalkerAPI {
 
       if (data.js?.cmd) {
         // Extract the actual stream URL from the cmd
-        const streamUrl = data.js.cmd.split(' ')[0];
+        // The cmd format is typically: "ffmpeg http://..." or just "http://..."
+        let streamUrl = data.js.cmd.trim();
+        
+        // If it starts with "ffmpeg ", extract everything after it
+        if (streamUrl.toLowerCase().startsWith('ffmpeg ')) {
+          streamUrl = streamUrl.substring(7).trim(); // Remove "ffmpeg " prefix
+        }
+        
+        // Additional cleanup: remove any other command prefixes if present
+        const urlMatch = streamUrl.match(/(https?:\/\/[^\s]+)/);
+        if (urlMatch) {
+          streamUrl = urlMatch[1];
+        }
+        
         return streamUrl;
       }
 
@@ -386,7 +465,20 @@ export class StalkerAPI {
 
       if (data.js?.cmd) {
         // Extract the actual stream URL from the cmd
-        const streamUrl = data.js.cmd.split(' ')[0];
+        // The cmd format is typically: "ffmpeg http://..." or just "http://..."
+        let streamUrl = data.js.cmd.trim();
+        
+        // If it starts with "ffmpeg ", extract everything after it
+        if (streamUrl.toLowerCase().startsWith('ffmpeg ')) {
+          streamUrl = streamUrl.substring(7).trim(); // Remove "ffmpeg " prefix
+        }
+        
+        // Additional cleanup: remove any other command prefixes if present
+        const urlMatch = streamUrl.match(/(https?:\/\/[^\s]+)/);
+        if (urlMatch) {
+          streamUrl = urlMatch[1];
+        }
+        
         return streamUrl;
       }
 
@@ -415,7 +507,20 @@ export class StalkerAPI {
 
       if (data.js?.cmd) {
         // Extract the actual stream URL from the cmd
-        const streamUrl = data.js.cmd.split(' ')[0];
+        // The cmd format is typically: "ffmpeg http://..." or just "http://..."
+        let streamUrl = data.js.cmd.trim();
+        
+        // If it starts with "ffmpeg ", extract everything after it
+        if (streamUrl.toLowerCase().startsWith('ffmpeg ')) {
+          streamUrl = streamUrl.substring(7).trim(); // Remove "ffmpeg " prefix
+        }
+        
+        // Additional cleanup: remove any other command prefixes if present
+        const urlMatch = streamUrl.match(/(https?:\/\/[^\s]+)/);
+        if (urlMatch) {
+          streamUrl = urlMatch[1];
+        }
+        
         return streamUrl;
       }
 
@@ -446,18 +551,80 @@ export class StalkerAPI {
     return this.config.macAddress;
   }
 
-  static generateMAC(): string {
+  static generateMAC(prefix?: string): string {
     const hexDigits = '0123456789ABCDEF';
-    let mac = '00:1A:79:'; // Common MAG prefix
+    let mac = prefix || '00:1A:79:'; // Common MAG prefix, can be customized
 
-    for (let i = 0; i < 3; i++) {
+    // Ensure prefix ends with colon if it doesn't have all 6 octets
+    if (!mac.endsWith(':') && mac.split(':').length < 6) {
+      mac += ':';
+    }
+
+    const existingOctets = mac.split(':').filter(o => o.length > 0).length;
+    const octetsNeeded = 6 - existingOctets;
+
+    for (let i = 0; i < octetsNeeded; i++) {
       for (let j = 0; j < 2; j++) {
         mac += hexDigits.charAt(Math.floor(Math.random() * 16));
       }
-      if (i < 2) mac += ':';
+      if (i < octetsNeeded - 1) mac += ':';
     }
 
     return mac;
+  }
+
+  static generateMultipleMACs(count: number = 5, prefix?: string): string[] {
+    const macs: string[] = [];
+    const commonPrefixes = [
+      '00:1A:79:', // MAG200/250/254/256
+      '00:1A:78:', // MAG alternative
+      '00:50:C2:', // IEEE registered
+      '00:E0:4C:', // Realtek
+      '00:0D:97:', // Hitachi
+    ];
+
+    for (let i = 0; i < count; i++) {
+      const selectedPrefix = prefix || commonPrefixes[i % commonPrefixes.length];
+      macs.push(this.generateMAC(selectedPrefix));
+    }
+
+    return macs;
+  }
+
+  static async testMultipleMACs(
+    portalUrl: string,
+    macAddresses: string[],
+    timezone?: string
+  ): Promise<{
+    workingMACs: Array<{ mac: string; profile?: any; subscription?: any }>;
+    failedMACs: string[];
+  }> {
+    const workingMACs: Array<{ mac: string; profile?: any; subscription?: any }> = [];
+    const failedMACs: string[] = [];
+
+    for (const mac of macAddresses) {
+      try {
+        const api = new StalkerAPI({ portalUrl, macAddress: mac, timezone });
+        const handshakeSuccess = await api.handshake();
+
+        if (handshakeSuccess) {
+          const profile = await api.getProfile();
+          const subscription = await api.getSubscriptionInfo();
+          
+          workingMACs.push({
+            mac,
+            profile,
+            subscription,
+          });
+        } else {
+          failedMACs.push(mac);
+        }
+      } catch (error) {
+        failedMACs.push(mac);
+      }
+    }
+
+    return { workingMACs, failedMACs };
   }
 
   static validateMAC(mac: string): boolean {
