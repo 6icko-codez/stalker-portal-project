@@ -30,3 +30,78 @@ model Post {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// IPTV Models
+model Portal {
+  id          String    @id @default(cuid())
+  name        String
+  url         String
+  macAddress  String
+  timezone    String    @default("UTC")
+  isActive    Boolean   @default(true)
+  lastTested  DateTime?
+  status      String    @default("unknown") // connected, disconnected, error
+  channels    Channel[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Channel {
+  id          String         @id @default(cuid())
+  portalId    String
+  portal      Portal         @relation(fields: [portalId], references: [id], onDelete: Cascade)
+  externalId  String         // Channel ID from portal
+  name        String
+  number      Int?
+  logo        String?
+  category    String?
+  streamUrl   String?
+  epgId       String?
+  isHD        Boolean        @default(false)
+  isFavorite  Boolean        @default(false)
+  favorites   Favorite[]
+  watchHistory WatchHistory[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([portalId, externalId])
+}
+
+model Favorite {
+  id        String   @id @default(cuid())
+  channelId String
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId    String?  // Optional user association
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@unique([channelId, userId])
+}
+
+model WatchHistory {
+  id          String   @id @default(cuid())
+  channelId   String
+  channel     Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  userId      String?  // Optional user association
+  duration    Int      @default(0) // seconds watched
+  lastPosition Int     @default(0) // last playback position
+  watchedAt   DateTime @default(now())
+}
+
+model EPGProgram {
+  id          String   @id @default(cuid())
+  channelId   String
+  epgId       String   // EPG channel identifier
+  title       String
+  description String?
+  startTime   DateTime
+  endTime     DateTime
+  category    String?
+  rating      String?
+  poster      String?
+  isRecorded  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([channelId, startTime])
+  @@index([epgId, startTime])
+}
