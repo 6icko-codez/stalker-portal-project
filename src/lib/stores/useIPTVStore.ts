@@ -182,6 +182,11 @@ interface IPTVStore {
   setEPGPanelOpen: (open: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
 
+  // Scroll Position Management
+  scrollPositions: Map<string, { channels: number; movies: number; series: number }>;
+  setScrollPosition: (portalId: string, type: 'channels' | 'movies' | 'series', position: number) => void;
+  getScrollPosition: (portalId: string, type: 'channels' | 'movies' | 'series') => number;
+
   // Settings
   settings: {
     autoPlay: boolean;
@@ -614,6 +619,21 @@ export const useIPTVStore = create<IPTVStore>()(
       setSidebarOpen: (open) => set({ sidebarOpen: open }),
       setEPGPanelOpen: (open) => set({ epgPanelOpen: open }),
       setSettingsOpen: (open) => set({ settingsOpen: open }),
+
+      // Scroll Position Management
+      scrollPositions: new Map(),
+      setScrollPosition: (portalId, type, position) => {
+        set((state) => {
+          const newScrollPositions = new Map(state.scrollPositions);
+          const current = newScrollPositions.get(portalId) || { channels: 0, movies: 0, series: 0 };
+          newScrollPositions.set(portalId, { ...current, [type]: position });
+          return { scrollPositions: newScrollPositions };
+        });
+      },
+      getScrollPosition: (portalId, type) => {
+        const positions = get().scrollPositions.get(portalId);
+        return positions?.[type] || 0;
+      },
 
       // Settings
       settings: {
