@@ -263,9 +263,16 @@ export class StalkerAPI {
 
   async createLink(cmd: string, channelId: string): Promise<string | null> {
     try {
+      console.log('[StalkerAPI.createLink] Creating link with parameters:', {
+        channelId,
+        cmd: cmd.substring(0, 100) + (cmd.length > 100 ? '...' : ''),
+        cmdLength: cmd.length,
+      });
+
       const data = await this.makeRequest('itv', {
         action: 'create_link',
         cmd: encodeURIComponent(cmd),
+        id: channelId, // CRITICAL FIX: Include channel ID in the request
         series: '',
         forced_storage: 'undefined',
         disable_ad: '0',
@@ -273,28 +280,50 @@ export class StalkerAPI {
         JsHttpRequest: '1-xml',
       });
 
+      console.log('[StalkerAPI.createLink] Portal response:', {
+        hasCmd: !!data.js?.cmd,
+        cmdPreview: data.js?.cmd ? data.js.cmd.substring(0, 150) + (data.js.cmd.length > 150 ? '...' : '') : 'N/A',
+        fullResponse: JSON.stringify(data).substring(0, 300),
+      });
+
       if (data.js?.cmd) {
         // Extract the actual stream URL from the cmd
         // The cmd format is typically: "ffmpeg http://..." or just "http://..."
         let streamUrl = data.js.cmd.trim();
         
+        console.log('[StalkerAPI.createLink] Raw stream URL from portal:', {
+          rawUrl: streamUrl.substring(0, 200) + (streamUrl.length > 200 ? '...' : ''),
+          startsWithFfmpeg: streamUrl.toLowerCase().startsWith('ffmpeg '),
+        });
+        
         // If it starts with "ffmpeg ", extract everything after it
         if (streamUrl.toLowerCase().startsWith('ffmpeg ')) {
           streamUrl = streamUrl.substring(7).trim(); // Remove "ffmpeg " prefix
+          console.log('[StalkerAPI.createLink] Removed ffmpeg prefix, new URL:', streamUrl.substring(0, 200));
         }
         
         // Additional cleanup: remove any other command prefixes if present
         const urlMatch = streamUrl.match(/(https?:\/\/[^\s]+)/);
         if (urlMatch) {
           streamUrl = urlMatch[1];
+          console.log('[StalkerAPI.createLink] Extracted URL via regex:', streamUrl.substring(0, 200));
         }
+        
+        // Verify the stream parameter is present in the URL
+        const hasStreamParam = streamUrl.includes('stream=') && !streamUrl.includes('stream=&');
+        console.log('[StalkerAPI.createLink] Final stream URL validation:', {
+          hasStreamParam,
+          urlLength: streamUrl.length,
+          finalUrl: streamUrl.substring(0, 250) + (streamUrl.length > 250 ? '...' : ''),
+        });
         
         return streamUrl;
       }
 
+      console.error('[StalkerAPI.createLink] No cmd in portal response');
       return null;
     } catch (error) {
-      console.error('Create link failed:', error);
+      console.error('[StalkerAPI.createLink] Create link failed:', error);
       return null;
     }
   }

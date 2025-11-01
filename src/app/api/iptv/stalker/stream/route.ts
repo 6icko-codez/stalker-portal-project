@@ -15,6 +15,8 @@ export async function POST(request: NextRequest) {
       timezone: timezone || 'UTC',
       cmd: cmd?.substring(0, 100) + (cmd?.length > 100 ? '...' : ''),
       channelId,
+      channelIdType: typeof channelId,
+      channelIdLength: channelId?.toString().length,
     });
 
     // Validate required parameters
@@ -71,10 +73,15 @@ export async function POST(request: NextRequest) {
       console.log(`[Stream API ${requestId}] Could not fetch subscription info (non-critical)`);
     }
     
-    console.log(`[Stream API ${requestId}] Creating stream link...`);
+    console.log(`[Stream API ${requestId}] Creating stream link with channelId: ${channelId}...`);
 
-    // Create stream link
+    // Create stream link - channelId is now properly passed to the Stalker portal
     const streamUrl = await api.createLink(cmd, channelId);
+    
+    console.log(`[Stream API ${requestId}] createLink returned:`, {
+      hasStreamUrl: !!streamUrl,
+      streamUrlPreview: streamUrl ? streamUrl.substring(0, 200) + (streamUrl.length > 200 ? '...' : '') : 'NULL',
+    });
 
     if (!streamUrl) {
       console.error(`[Stream API ${requestId}] Failed to create stream link - no URL returned`);
